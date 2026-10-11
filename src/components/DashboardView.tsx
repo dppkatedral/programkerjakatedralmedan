@@ -24,8 +24,15 @@ import {
   ChevronUp,
   Landmark,
   FileText,
+  Lock,
+  LogOut,
+  KeyRound,
+  ShieldCheck,
+  RotateCcw,
 } from 'lucide-react';
 import { ProgramKerja } from '../types/proker';
+import { AuthSession } from '../types/auth';
+import { DashboardAuthGate } from './DashboardAuthGate';
 import {
   BULAN_LIST,
   formatRupiah,
@@ -48,6 +55,11 @@ interface DashboardViewProps {
   onOpenProgramDetail: (programId: string) => void;
   onInputProgramForSeksi: (seksiName: string) => void;
   onOpenEvaluasi: (program: ProgramKerja) => void;
+  authSession: AuthSession | null;
+  onAuthenticate: (session: AuthSession) => void;
+  onLockDashboard: () => void;
+  onOpenPinManager: () => void;
+  onPromptUnlockUnit?: (unitId: string, unitNama: string) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -58,6 +70,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenProgramDetail,
   onInputProgramForSeksi,
   onOpenEvaluasi,
+  authSession,
+  onAuthenticate,
+  onLockDashboard,
+  onOpenPinManager,
+  onPromptUnlockUnit,
 }) => {
   // State untuk toggle list pelayanan rutin per seksi (default: hide/tertutup)
   const [expandedSeksiRoutine, setExpandedSeksiRoutine] = useState<Record<string, boolean>>({});
@@ -209,8 +226,114 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   };
 
+  // JIKA BELUM TERAUTENTIKASI / DASHBOARD TERKUNCI:
+  // Seluruh hooks di atas sudah dieksekusi secara konsisten (mematuhi React Rules of Hooks)
+  // sehingga transisi login PIN berlangsung mulus tanpa blank screen!
+  if (!authSession) {
+    return (
+      <DashboardAuthGate
+        onAuthenticated={onAuthenticate}
+        initialSelectedUnit={selectedSeksi !== 'all' ? selectedSeksi : 'all'}
+        programs={programs}
+        selectedYear={selectedYear}
+      />
+    );
+  }
+
   return (
     <div className="space-y-3 pb-8 w-full">
+      {/* 0. ACTIVE SESSION & SECURITY BAR */}
+      <div className="bg-white p-2.5 sm:px-3 sm:py-2 rounded-xl border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div
+            className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+              authSession.role === 'pastor_paroki'
+                ? 'bg-indigo-600 text-white'
+                : authSession.role === 'semua_seksi'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-slate-800 text-white'
+            }`}
+          >
+            {authSession.role === 'pastor_paroki' ? (
+              <ShieldCheck className="w-4 h-4" />
+            ) : authSession.role === 'semua_seksi' ? (
+              <Users className="w-4 h-4" />
+            ) : (
+              <Building2 className="w-4 h-4" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs font-extrabold text-slate-900 truncate">
+                {authSession.unitNama}
+              </span>
+              <span
+                className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${
+                  authSession.role === 'pastor_paroki'
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                    : authSession.role === 'semua_seksi'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-slate-100 text-slate-700 border-slate-200'
+                }`}
+              >
+                {authSession.role === 'pastor_paroki'
+                  ? '👑 Hak Akses Penuh & Reset PIN'
+                  : authSession.role === 'semua_seksi'
+                  ? '🌐 Akses Semua Unit'
+                  : '🔒 Akses Seksi Terbuka'}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500 truncate">
+              {authSession.role === 'pastor_paroki'
+                ? 'Pastor Paroki / Admin dapat melihat seluruh data & mengelola PIN seluruh seksi'
+                : authSession.role === 'semua_seksi'
+                ? 'Melihat rekap seluruh program kerja paroki'
+                : `Hanya menampilkan data program kerja untuk ${authSession.unitNama}`}
+            </p>
+          </div>
+        </div>
+
+        {/* Actions for active session */}
+        <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+          {/* Pastor Paroki Button to Manage and Reset all PINs */}
+          {authSession.role === 'pastor_paroki' && (
+            <button
+              type="button"
+              onClick={onOpenPinManager}
+              className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-300 text-[10.5px] font-bold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+              title="Buka panel manajemen dan reset PIN seluruh seksi"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-indigo-700" />
+              <span>Kelola & Reset PIN</span>
+            </button>
+          )}
+
+          {/* Switch unit for specific seksi */}
+          {authSession.role === 'seksi' && onPromptUnlockUnit && (
+            <button
+              type="button"
+              onClick={() => onPromptUnlockUnit('all', 'Buka Unit Lain')}
+              className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+              title="Buka seksi lain dengan memasukkan PIN"
+            >
+              <Building2 className="w-3 h-3 text-slate-500" />
+              <span>Ganti Seksi</span>
+            </button>
+          )}
+
+          {/* Lock / Logout */}
+          <button
+            type="button"
+            onClick={onLockDashboard}
+            className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[10.5px] font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+            title="Keluar / Logout dan kunci kembali dashboard"
+          >
+            <LogOut className="w-3.5 h-3.5 text-rose-600" />
+            <span>Logout / Keluar</span>
+          </button>
+        </div>
+      </div>
+
       {/* 1. METRIK UTAMA BERDASARKAN BULAN & SEKSI PILIHAN */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full">
         {/* Metric 1: Total Program (Terjadwal vs Pelayanan Rutin) */}
@@ -420,6 +543,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                                       ✕ Tidak Terlaksana
                                     </span>
                                   )}
+                                  {p.evaluasi?.statusKeterlaksanaan === 'perubahan_waktu' && (
+                                    <span className="text-[8.5px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                                      ⏳ Geser Waktu {p.evaluasi.jadwalBaru ? `(${p.evaluasi.jadwalBaru})` : ''}
+                                    </span>
+                                  )}
                                   <p className="text-[11.5px] sm:text-xs font-bold text-slate-900 group-hover:text-emerald-950 truncate">
                                     {p.namaProgram}
                                   </p>
@@ -533,6 +661,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                                         {r.evaluasi?.statusKeterlaksanaan === 'tidak_terlaksana' && (
                                           <span className="text-[8.5px] font-bold px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 border border-rose-300">
                                             ✕ Tidak Terlaksana
+                                          </span>
+                                        )}
+                                        {r.evaluasi?.statusKeterlaksanaan === 'perubahan_waktu' && (
+                                          <span className="text-[8.5px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                                            ⏳ Geser Waktu {r.evaluasi.jadwalBaru ? `(${r.evaluasi.jadwalBaru})` : ''}
                                           </span>
                                         )}
                                       </div>

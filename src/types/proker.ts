@@ -18,8 +18,10 @@ export interface DokumenLampiran {
   ukuran?: string; // e.g. '2.4 MB'
 }
 
+export type StatusKeterlaksanaan = 'terlaksana' | 'tidak_terlaksana' | 'perubahan_waktu';
+
 export interface EvaluasiProgram {
-  statusKeterlaksanaan?: 'terlaksana' | 'tidak_terlaksana';
+  statusKeterlaksanaan?: StatusKeterlaksanaan;
   // Jika terlaksana (semua opsional):
   tanggalPelaksanaan?: string;
   tempatPelaksanaan?: string;
@@ -29,6 +31,10 @@ export interface EvaluasiProgram {
   dokumentasi?: DokumenLampiran[];
   // Jika tidak terlaksana:
   alasanTidakTerlaksana?: string;
+  // Jika perubahan waktu pelaksanaan:
+  jadwalBaru?: string; // e.g. Rencana tanggal atau bulan baru
+  alasanPerubahanWaktu?: string; // Alasan pergantian waktu
+  penjelasanPerubahan?: string; // Catatan tambahan perubahan
   // Metadata pengisi:
   tanggalEvaluasi?: string;
   evaluator?: string;

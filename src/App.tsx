@@ -27,6 +27,11 @@ import {
   Check,
   RotateCcw,
   LayoutDashboard,
+  Lock,
+  LogIn,
+  LogOut,
+  KeyRound,
+  ShieldCheck,
 } from 'lucide-react';
 import { ProgramKerja, ScheduleType, ProgramStatus } from './types/proker';
 import { INITIAL_PROGRAM_KERJA } from './data/initialData';
@@ -51,7 +56,12 @@ import { SelectSeksiModal } from './components/SelectSeksiModal';
 import { DashboardView } from './components/DashboardView';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { EvaluasiModal } from './components/EvaluasiModal';
+import { PinManagementModal } from './components/PinManagementModal';
+import { UnlockUnitModal } from './components/UnlockUnitModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { EvaluasiProgram } from './types/proker';
+import { AuthSession } from './types/auth';
+import { authPinService } from './utils/authPinService';
 
 export default function App() {
   // 1. Data Store from DatabaseService with automatic migration execution and Cloud Firestore sync
@@ -75,11 +85,25 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // 1B. Authentication & Security State
+  // Default: Sesuai instruksi, dashboard awal dibuat tidak ada data program dari seksi manapun sampai dimasukkan password/PIN
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => {
+    return authPinService.getSession();
+  });
+  const [isPinManagerOpen, setIsPinManagerOpen] = useState<boolean>(false);
+  const [unlockTarget, setUnlockTarget] = useState<{ unitId: string; unitNama: string } | null>(null);
+
   // 2. Filters & Navigation Tabs
   const [activeTab, setActiveTab] = useState<'dashboard' | 'input'>('dashboard');
   const [selectedYear, setSelectedYear] = useState<'all' | 2026 | 2027>('all');
   const [selectedMonth, setSelectedMonth] = useState<number | 'all'>('all'); // Default 'all' atau bulan tertentu (1-12)
-  const [selectedSeksi, setSelectedSeksi] = useState<string | 'all'>('all'); // Filter berdasarkan Seksi/Divisi
+  const [selectedSeksi, setSelectedSeksi] = useState<string | 'all'>(() => {
+    const session = authPinService.getSession();
+    if (session && session.role === 'seksi') {
+      return session.unitNama;
+    }
+    return 'all';
+  }); // Filter berdasarkan Seksi/Divisi
   const [isSelectSeksiModalOpen, setIsSelectSeksiModalOpen] = useState<boolean>(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
   const [isMobileDeviceFrame, setIsMobileDeviceFrame] = useState<boolean>(false);
@@ -93,14 +117,78 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  // Simpan hasil evaluasi program kerja (terlaksana / tidak terlaksana)
+  // Auth Handlers
+  const handleAuthenticate = (session: AuthSession) => {
+    setAuthSession(session);
+    if (session.role === 'seksi') {
+      setSelectedSeksi(session.unitNama);
+    } else {
+      setSelectedSeksi('all');
+    }
+    showToast(`Sesi dibuka: ${session.unitNama}`);
+  };
+
+  const handleLockDashboard = () => {
+    authPinService.clearSession();
+    setAuthSession(null);
+    setSelectedSeksi('all');
+    showToast('Dashboard telah dikunci. Data program disembunyikan.');
+  };
+
+  // Handler pergantian seksi dengan verifikasi PIN
+  const handleSelectSeksiWithAuth = (newSeksi: string) => {
+    if (!authSession) {
+      setUnlockTarget({
+        unitId: newSeksi,
+        unitNama: newSeksi === 'all' ? 'Semua Unit' : newSeksi,
+      });
+      return;
+    }
+
+    if (newSeksi === 'all') {
+      if (authSession.role === 'pastor_paroki' || authSession.role === 'semua_seksi') {
+        setSelectedSeksi('all');
+      } else {
+        setUnlockTarget({
+          unitId: 'all',
+          unitNama: 'Semua Unit',
+        });
+      }
+      return;
+    }
+
+    // Target adalah Seksi / DPPH tertentu
+    if (authSession.role === 'pastor_paroki' || authSession.role === 'semua_seksi') {
+      setSelectedSeksi(newSeksi);
+      return;
+    }
+
+    if (authSession.role === 'seksi' && isDivisionMatch(authSession.unitNama, newSeksi)) {
+      setSelectedSeksi(newSeksi);
+      return;
+    }
+
+    // Unit lain membutuhkan PIN unit tersebut
+    const div = MASTER_DIVISIONS.find((d) => isDivisionMatch(d.nama, newSeksi));
+    setUnlockTarget({
+      unitId: div ? div.id : newSeksi,
+      unitNama: newSeksi,
+    });
+  };
+
+  // Simpan hasil evaluasi program kerja (1. Terlaksana, 2. Tidak Terlaksana, 3. Perubahan waktu pelaksanaan)
   const handleSaveEvaluasi = (programId: string, evaluasiData: EvaluasiProgram) => {
     const prog = programs.find((p) => p.id === programId);
     if (!prog) return;
     const updated: ProgramKerja = {
       ...prog,
       evaluasi: evaluasiData,
-      status: evaluasiData.statusKeterlaksanaan === 'terlaksana' ? 'selesai' : prog.status,
+      status:
+        evaluasiData.statusKeterlaksanaan === 'terlaksana'
+          ? 'selesai'
+          : evaluasiData.statusKeterlaksanaan === 'perubahan_waktu'
+          ? 'direncanakan'
+          : prog.status,
       updatedAt: new Date().toISOString(),
     };
     dbService.saveProgram(updated);
@@ -110,9 +198,21 @@ export default function App() {
     showToast(`Evaluasi untuk "${prog.namaProgram}" berhasil disimpan!`);
   };
 
-  // 3. Filtered programs list based on Tahun, Bulan, & Seksi
+  // 3. Filtered programs list based on Tahun, Bulan, Seksi & Hak Akses
   const filteredPrograms = useMemo(() => {
+    // Sesuai aturan: jika belum login / belum masukkan PIN, data tidak ditampilkan
+    if (!authSession) {
+      return [];
+    }
+
     return programs.filter((p) => {
+      // Pembatasan per unit jika login sebagai Seksi tertentu
+      if (
+        authSession.role === 'seksi' &&
+        !isDivisionMatch(p.penanggungjawab?.divisi, authSession.unitNama)
+      ) {
+        return false;
+      }
       // Filter Tahun
       if (selectedYear !== 'all' && p.tahun !== selectedYear) return false;
       // Filter Bulan Kegiatan
@@ -126,7 +226,7 @@ export default function App() {
       }
       return true;
     });
-  }, [programs, selectedYear, selectedMonth, selectedSeksi]);
+  }, [programs, selectedYear, selectedMonth, selectedSeksi, authSession]);
 
   // 4. Currently Selected Program ID for 1-Screen View & Editing
   const [currentId, setCurrentId] = useState<string>(() => {
@@ -476,7 +576,11 @@ export default function App() {
   }, [programsInSelectedYear, selectedMonth]);
 
   // Auto-reset selectedSeksi jika seksi/DPPH tidak memiliki program di bulan yang baru dipilih
+  // Catatan: Jangan me-reset jika user login sebagai unit seksi tertentu agar pilihan tetap konsisten
   useEffect(() => {
+    if (authSession?.role === 'seksi') {
+      return;
+    }
     if (selectedSeksi !== 'all') {
       const isAvailable = activeSeksiInSelectedMonth.some(
         (item) => isDivisionMatch(item.division.nama, selectedSeksi)
@@ -485,7 +589,7 @@ export default function App() {
         setSelectedSeksi('all');
       }
     }
-  }, [selectedMonth, activeSeksiInSelectedMonth, selectedSeksi]);
+  }, [selectedMonth, activeSeksiInSelectedMonth, selectedSeksi, authSession]);
 
   // Overall budget summary
   const totalAnggaran = useMemo(() => {
@@ -493,8 +597,9 @@ export default function App() {
   }, [filteredPrograms]);
 
   return (
-    <div
-      className={`min-h-screen bg-slate-100 flex flex-col items-center ${
+    <ErrorBoundary>
+      <div
+        className={`min-h-screen bg-slate-100 flex flex-col items-center ${
         isMobileDeviceFrame ? 'py-5 px-3' : ''
       }`}
     >
@@ -555,40 +660,92 @@ export default function App() {
               </div>
             </div>
 
-            {/* Menu Aksi (Download, Input Seksi, + Baru) Dibuat Lebih Kecil & Kompak */}
-            <div className="flex items-center gap-1.5 w-full sm:w-auto shrink-0">
-              {/* Export / Download CSV Button */}
-              <button
-                type="button"
-                onClick={() => exportToCSV(programs)}
-                className="flex-1 sm:flex-none h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold text-slate-700 flex items-center justify-center gap-1 transition-colors shadow-2xs"
-                title="Unduh Data ke CSV / Excel"
-              >
-                <Download className="w-3 h-3 text-slate-600" />
-                <span>Download</span>
-              </button>
+            {/* Menu Aksi: Jika belum login, HANYA tombol Login PIN */}
+            <div className="flex items-center gap-1.5 w-full sm:w-auto shrink-0 flex-wrap sm:flex-nowrap">
+              {/* Session / Lock Indicator Badge & Login / Logout in Header */}
+              {authSession ? (
+                <>
+                  <div className="flex items-center gap-1">
+                    <div className="h-7 px-2 rounded-md bg-slate-900 text-white flex items-center gap-1.5 text-[10px] shadow-2xs">
+                      <span className="font-extrabold truncate max-w-[110px] sm:max-w-[145px]">
+                        {authSession.role === 'pastor_paroki'
+                          ? '👑 Pastor Paroki'
+                          : authSession.role === 'semua_seksi'
+                          ? '🌐 Semua Seksi'
+                          : `🏛️ ${authSession.unitNama}`}
+                      </span>
+                      {authSession.role === 'pastor_paroki' && (
+                        <button
+                          type="button"
+                          onClick={() => setIsPinManagerOpen(true)}
+                          className="px-1.5 py-0.2 rounded bg-indigo-600 hover:bg-indigo-500 text-[9px] font-bold text-white transition-colors cursor-pointer"
+                          title="Kelola & Reset PIN"
+                        >
+                          PIN
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleLockDashboard}
+                      className="h-7 px-2 rounded-md bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-[10px] flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                      title="Keluar / Logout dan kunci kembali dashboard"
+                    >
+                      <LogOut className="w-3 h-3 text-rose-600" />
+                      <span className="hidden sm:inline">Logout</span>
+                    </button>
+                  </div>
 
-              {/* Input Program per Seksi Button */}
-              <button
-                type="button"
-                onClick={() => setIsSelectSeksiModalOpen(true)}
-                className="flex-1 sm:flex-none h-7 px-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center gap-1 shadow-xs transition-colors"
-                title="Pilih seksi untuk input program kerja baru"
-              >
-                <Plus className="w-3 h-3" />
-                <span>Input Seksi</span>
-              </button>
+                  {/* Export / Download CSV Button */}
+                  <button
+                    type="button"
+                    onClick={() => exportToCSV(programs)}
+                    className="flex-1 sm:flex-none h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold text-slate-700 flex items-center justify-center gap-1 transition-colors shadow-2xs"
+                    title="Unduh Data ke CSV / Excel"
+                  >
+                    <Download className="w-3 h-3 text-slate-600" />
+                    <span>Download</span>
+                  </button>
 
-              {/* Tambah Baru Button */}
-              <button
-                type="button"
-                onClick={handleAddNew}
-                className="flex-1 sm:flex-none h-7 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-bold flex items-center justify-center gap-1 shadow-xs transition-colors"
-                title="Tambah Program Baru"
-              >
-                <Plus className="w-3 h-3 text-emerald-400" />
-                <span>+ Baru</span>
-              </button>
+                  {/* Input Program per Seksi Button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsSelectSeksiModalOpen(true)}
+                    className="flex-1 sm:flex-none h-7 px-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold flex items-center justify-center gap-1 shadow-xs transition-colors"
+                    title="Pilih seksi untuk input program kerja baru"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Input Seksi</span>
+                  </button>
+
+                  {/* Tambah Baru Button */}
+                  <button
+                    type="button"
+                    onClick={handleAddNew}
+                    className="flex-1 sm:flex-none h-7 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-bold flex items-center justify-center gap-1 shadow-xs transition-colors"
+                    title="Tambah Program Baru"
+                  >
+                    <Plus className="w-3 h-3 text-emerald-400" />
+                    <span>+ Baru</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('dashboard');
+                    setUnlockTarget({
+                      unitId: 'all',
+                      unitNama: 'Semua Unit',
+                    });
+                  }}
+                  className="h-7.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] flex items-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer"
+                  title="Masuk / Login dengan PIN angka untuk membuka data"
+                >
+                  <Lock className="w-3.5 h-3.5 text-emerald-100" />
+                  <span>Login PIN</span>
+                </button>
+              )}
 
               {/* Toggle HP Frame mode on desktop */}
               <button
@@ -606,33 +763,36 @@ export default function App() {
             </div>
           </div>
 
-          {/* TAB NAVIGASI: DASHBOARD vs INPUT & DETAIL PROGRAM */}
-          <div className="flex items-center p-0.5 bg-slate-200/80 rounded-lg">
-            <button
-              type="button"
-              onClick={() => setActiveTab('dashboard')}
-              className={`flex-1 py-1.5 px-3 rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all ${
-                activeTab === 'dashboard'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Dashboard Program</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('input')}
-              className={`flex-1 py-1.5 px-3 rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all ${
-                activeTab === 'input'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <FileText className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Input & Detail Program</span>
-            </button>
-          </div>
+          {/* TAB NAVIGASI & KONTROL FILTER: HANYA DITAMPILKAN SETELAH LOGIN */}
+          {authSession && (
+            <>
+              {/* TAB NAVIGASI: DASHBOARD vs INPUT & DETAIL PROGRAM */}
+              <div className="flex items-center p-0.5 bg-slate-200/80 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  className={`flex-1 py-1.5 px-3 rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    activeTab === 'dashboard'
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <LayoutDashboard className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Dashboard Program</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('input')}
+                  className={`flex-1 py-1.5 px-3 rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    activeTab === 'input'
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Input & Detail Program</span>
+                </button>
+              </div>
 
           {/* KONTROL KHUSUS TAB DASHBOARD: PILIHAN PERIODE & SEKSI TETAP DI ATAS SAAT SCROLL DOWN SEPERTI JUDUL */}
           {activeTab === 'dashboard' && (
@@ -704,7 +864,7 @@ export default function App() {
                 <div className="relative min-w-0">
                   <select
                     value={selectedSeksi}
-                    onChange={(e) => setSelectedSeksi(e.target.value)}
+                    onChange={(e) => handleSelectSeksiWithAuth(e.target.value)}
                     className="w-full h-7.5 bg-white border border-slate-300 rounded-lg pl-2 pr-6 text-[10.5px] font-bold text-slate-900 focus:outline-none focus:border-slate-500 cursor-pointer shadow-2xs truncate"
                     title="Pilih DPPH atau Seksi Tertentu"
                   >
@@ -780,7 +940,7 @@ export default function App() {
                 <div className="relative min-w-0">
                   <select
                     value={selectedSeksi}
-                    onChange={(e) => setSelectedSeksi(e.target.value)}
+                    onChange={(e) => handleSelectSeksiWithAuth(e.target.value)}
                     className="w-full h-7 bg-white border border-slate-300 rounded-md pl-1.5 pr-4 text-[10px] font-bold text-slate-900 focus:outline-none focus:border-slate-500 cursor-pointer shadow-2xs truncate"
                     title="Filter Berdasarkan DPPH / Seksi"
                   >
@@ -861,30 +1021,62 @@ export default function App() {
               </div>
             </>
           )}
-        </header>
+        </>
+      )}
+    </header>
 
         {/* 4. MAIN BODY: DASHBOARD ATAU FORM INPUT & DETAIL PROGRAM */}
         <main className="flex-1 px-3 sm:px-4 py-3 pb-24 overflow-y-auto space-y-4">
           {activeTab === 'dashboard' ? (
-            <DashboardView
-              programs={programs}
-              selectedYear={selectedYear}
-              onSelectYear={setSelectedYear}
-              selectedMonth={selectedMonth}
-              onSelectMonth={setSelectedMonth}
-              selectedSeksi={selectedSeksi}
-              onSelectSeksi={setSelectedSeksi}
-              onOpenProgramDetail={(progId) => {
-                setCurrentId(progId);
-                setActiveTab('input');
-              }}
-              onInputProgramForSeksi={(seksiName) => {
-                handleCreateProgramForSeksi(seksiName, getDefaultPicForDivisi(seksiName));
-              }}
-              onOpenEvaluasi={(prog) => {
-                setEvaluatingProgram(prog);
-              }}
-            />
+            <ErrorBoundary>
+              <DashboardView
+                programs={programs}
+                selectedYear={selectedYear}
+                onSelectYear={setSelectedYear}
+                selectedMonth={selectedMonth}
+                onSelectMonth={setSelectedMonth}
+                selectedSeksi={selectedSeksi}
+                onSelectSeksi={handleSelectSeksiWithAuth}
+                onOpenProgramDetail={(progId) => {
+                  setCurrentId(progId);
+                  setActiveTab('input');
+                }}
+                onInputProgramForSeksi={(seksiName) => {
+                  handleCreateProgramForSeksi(seksiName, getDefaultPicForDivisi(seksiName));
+                }}
+                onOpenEvaluasi={(prog) => {
+                  setEvaluatingProgram(prog);
+                }}
+                authSession={authSession}
+                onAuthenticate={handleAuthenticate}
+                onLockDashboard={handleLockDashboard}
+                onOpenPinManager={() => setIsPinManagerOpen(true)}
+                onPromptUnlockUnit={(unitId, unitNama) => setUnlockTarget({ unitId, unitNama })}
+              />
+            </ErrorBoundary>
+          ) : !authSession ? (
+            /* Protected Locked state for Input tab */
+            <div className="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200 text-center space-y-4 max-w-lg mx-auto shadow-sm mt-6">
+              <div className="w-12 h-12 rounded-2xl bg-slate-900 text-emerald-400 flex items-center justify-center mx-auto shadow-sm">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Data Program Dilindungi PIN Keamanan
+                </h3>
+                <p className="text-xs text-slate-600 mt-1.5 max-w-xs mx-auto leading-relaxed">
+                  Data program kerja Paroki St. Perawan Maria Katedral Medan hanya dapat diakses dengan memasukkan PIN. Silakan buka akses di tab Dashboard.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('dashboard')}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              >
+                <KeyRound className="w-4 h-4 text-emerald-400" />
+                <span>Buka Kunci Akses di Dashboard</span>
+              </button>
+            </div>
           ) : filteredPrograms.length === 0 ? (
             /* Empty State if filter yields no items */
             <div className="bg-white rounded-2xl p-8 border border-dashed border-slate-300 text-center space-y-3 mt-4">
@@ -1721,7 +1913,18 @@ export default function App() {
         <SelectSeksiModal
           isOpen={isSelectSeksiModalOpen}
           onClose={() => setIsSelectSeksiModalOpen(false)}
-          onSelectSeksi={handleCreateProgramForSeksi}
+          onSelectSeksi={(seksiName, defaultPicName) => {
+            setIsSelectSeksiModalOpen(false);
+            if (authSession?.role === 'seksi' && !isDivisionMatch(authSession.unitNama, seksiName)) {
+              const div = MASTER_DIVISIONS.find((d) => isDivisionMatch(d.nama, seksiName));
+              setUnlockTarget({
+                unitId: div ? div.id : seksiName,
+                unitNama: seksiName,
+              });
+              return;
+            }
+            handleCreateProgramForSeksi(seksiName, defaultPicName);
+          }}
           selectedYear={selectedYear === 'all' ? 2026 : selectedYear}
           existingPrograms={programs}
         />
@@ -1742,7 +1945,34 @@ export default function App() {
           onClose={() => setEvaluatingProgram(null)}
           onSaveEvaluasi={handleSaveEvaluasi}
         />
+
+        {/* Modal Manajemen PIN khusus Pastor Paroki / Admin */}
+        <PinManagementModal
+          isOpen={isPinManagerOpen}
+          onClose={() => setIsPinManagerOpen(false)}
+          onPinUpdated={(msg) => showToast(msg)}
+        />
+
+        {/* Modal Masukkan PIN saat memilih Seksi / DPPH */}
+        {unlockTarget && (
+          <UnlockUnitModal
+            isOpen={!!unlockTarget}
+            unitId={unlockTarget.unitId}
+            unitNama={unlockTarget.unitNama}
+            onClose={() => setUnlockTarget(null)}
+            onSuccess={(newSession) => {
+              setAuthSession(newSession);
+              if (newSession.role === 'seksi') {
+                setSelectedSeksi(newSession.unitNama);
+              } else {
+                setSelectedSeksi('all');
+              }
+              showToast(`Data untuk ${newSession.unitNama} berhasil dibuka!`);
+            }}
+          />
+        )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

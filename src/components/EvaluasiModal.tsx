@@ -17,7 +17,7 @@ import {
   Building2,
   Eye,
 } from 'lucide-react';
-import { ProgramKerja, EvaluasiProgram, DokumenLampiran } from '../types/proker';
+import { ProgramKerja, EvaluasiProgram, DokumenLampiran, StatusKeterlaksanaan } from '../types/proker';
 import { formatRupiah, parseRupiahInput } from '../utils/formatters';
 
 interface EvaluasiModalProps {
@@ -33,7 +33,7 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
   onClose,
   onSaveEvaluasi,
 }) => {
-  const [statusKeterlaksanaan, setStatusKeterlaksanaan] = useState<'terlaksana' | 'tidak_terlaksana'>('terlaksana');
+  const [statusKeterlaksanaan, setStatusKeterlaksanaan] = useState<StatusKeterlaksanaan>('terlaksana');
   const [tanggalPelaksanaan, setTanggalPelaksanaan] = useState<string>('');
   const [tempatPelaksanaan, setTempatPelaksanaan] = useState<string>('');
   const [jumlahPeserta, setJumlahPeserta] = useState<string>('');
@@ -42,6 +42,9 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
   const [anggaranTerpakai, setAnggaranTerpakai] = useState<number>(0);
   const [dokumentasi, setDokumentasi] = useState<DokumenLampiran[]>([]);
   const [alasanTidakTerlaksana, setAlasanTidakTerlaksana] = useState<string>('');
+  const [jadwalBaru, setJadwalBaru] = useState<string>('');
+  const [alasanPerubahanWaktu, setAlasanPerubahanWaktu] = useState<string>('');
+  const [penjelasanPerubahan, setPenjelasanPerubahan] = useState<string>('');
   const [evaluator, setEvaluator] = useState<string>('');
 
   // Sinkronisasi data saat modal dibuka
@@ -58,6 +61,9 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
         setRawAnggaran(prev.anggaranTerpakai ? prev.anggaranTerpakai.toLocaleString('id-ID') : '');
         setDokumentasi(prev.dokumentasi || []);
         setAlasanTidakTerlaksana(prev.alasanTidakTerlaksana || '');
+        setJadwalBaru(prev.jadwalBaru || '');
+        setAlasanPerubahanWaktu(prev.alasanPerubahanWaktu || '');
+        setPenjelasanPerubahan(prev.penjelasanPerubahan || '');
         setEvaluator(prev.evaluator || program.penanggungjawab?.nama || '');
       } else {
         // Default kosong / baru
@@ -74,6 +80,9 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
         setRawAnggaran(program.estimasiAnggaran ? program.estimasiAnggaran.toLocaleString('id-ID') : '');
         setDokumentasi([]);
         setAlasanTidakTerlaksana('');
+        setJadwalBaru('');
+        setAlasanPerubahanWaktu('');
+        setPenjelasanPerubahan('');
         setEvaluator(program.penanggungjawab?.nama || '');
       }
     }
@@ -134,6 +143,13 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
             anggaranTerpakai,
             dokumentasi,
           }
+        : statusKeterlaksanaan === 'perubahan_waktu'
+        ? {
+            jadwalBaru,
+            alasanPerubahanWaktu,
+            penjelasanPerubahan,
+            dokumentasi,
+          }
         : {
             alasanTidakTerlaksana,
           }),
@@ -173,18 +189,18 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
 
         {/* Form Body Scrollable */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
-          {/* 1. Pilihan Status Keterlaksanaan Program */}
+          {/* 1. Pilihan Status Keterlaksanaan Program: 3 Pilihan */}
           <div>
             <label className="block text-xs font-bold text-slate-800 mb-1.5">
-              1. Status Keterlaksanaan Program:
+              1. Pilihan Status Evaluasi Pelaksanaan:
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setStatusKeterlaksanaan('terlaksana')}
-                className={`p-3 rounded-xl border text-left transition-all flex items-center gap-2.5 cursor-pointer ${
+                className={`p-2.5 rounded-xl border text-left transition-all flex items-center sm:flex-col sm:items-start gap-2 cursor-pointer ${
                   statusKeterlaksanaan === 'terlaksana'
-                    ? 'border-emerald-500 bg-emerald-50/80 text-emerald-950 ring-2 ring-emerald-500/20 shadow-2xs'
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-950 ring-2 ring-emerald-500/20 shadow-2xs'
                     : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
                 }`}
               >
@@ -198,17 +214,17 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
                   <CheckCircle2 className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-extrabold">Program Terlaksana</h4>
-                  <p className="text-[10px] text-slate-500">Kegiatan telah dilaksanakan</p>
+                  <h4 className="text-xs font-extrabold">1. Terlaksana</h4>
+                  <p className="text-[10px] text-slate-500">Kegiatan telah selesai</p>
                 </div>
               </button>
 
               <button
                 type="button"
                 onClick={() => setStatusKeterlaksanaan('tidak_terlaksana')}
-                className={`p-3 rounded-xl border text-left transition-all flex items-center gap-2.5 cursor-pointer ${
+                className={`p-2.5 rounded-xl border text-left transition-all flex items-center sm:flex-col sm:items-start gap-2 cursor-pointer ${
                   statusKeterlaksanaan === 'tidak_terlaksana'
-                    ? 'border-rose-500 bg-rose-50/80 text-rose-950 ring-2 ring-rose-500/20 shadow-2xs'
+                    ? 'border-rose-500 bg-rose-50 text-rose-950 ring-2 ring-rose-500/20 shadow-2xs'
                     : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
                 }`}
               >
@@ -222,8 +238,32 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
                   <XCircle className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-extrabold">Tidak Terlaksana</h4>
-                  <p className="text-[10px] text-slate-500">Kegiatan belum/tidak terlaksana</p>
+                  <h4 className="text-xs font-extrabold">2. Tidak Terlaksana</h4>
+                  <p className="text-[10px] text-slate-500">Kegiatan ditiadakan</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStatusKeterlaksanaan('perubahan_waktu')}
+                className={`p-2.5 rounded-xl border text-left transition-all flex items-center sm:flex-col sm:items-start gap-2 cursor-pointer ${
+                  statusKeterlaksanaan === 'perubahan_waktu'
+                    ? 'border-amber-500 bg-amber-50 text-amber-950 ring-2 ring-amber-500/20 shadow-2xs'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    statusKeterlaksanaan === 'perubahan_waktu'
+                      ? 'bg-amber-600 text-white'
+                      : 'bg-white border border-slate-300 text-slate-400'
+                  }`}
+                >
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-extrabold">3. Perubahan Waktu</h4>
+                  <p className="text-[10px] text-slate-500">Jadwal bergeser</p>
                 </div>
               </button>
             </div>
@@ -435,6 +475,56 @@ export const EvaluasiModal: React.FC<EvaluasiModalProps> = ({
                   onChange={(e) => setAlasanTidakTerlaksana(e.target.value)}
                   placeholder="Contoh: Terkendala ketiadaan anggaran, perubahan jadwal kalender keuskupan, atau dialihkan ke semester berikutnya..."
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-rose-400 focus:bg-white"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 2C. FORM JIKA TERJADI PERUBAHAN WAKTU PELAKSANAAN */}
+          {statusKeterlaksanaan === 'perubahan_waktu' && (
+            <div className="space-y-3.5 pt-2 border-t border-slate-100 animate-in fade-in">
+              <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl text-[11px] text-amber-950 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Program tetap direncanakan tetapi mengalami penyesuaian atau pergeseran jadwal pelaksanaan.</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Rencana Jadwal / Waktu Baru Pelaksanaan:</span>
+                </label>
+                <input
+                  type="text"
+                  value={jadwalBaru}
+                  onChange={(e) => setJadwalBaru(e.target.value)}
+                  placeholder="Contoh: Digeser ke Bulan Oktober 2026 / Tanggal 18 November 2026..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-amber-400 focus:bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Alasan Perubahan Waktu Pelaksanaan:
+                </label>
+                <textarea
+                  rows={3}
+                  value={alasanPerubahanWaktu}
+                  onChange={(e) => setAlasanPerubahanWaktu(e.target.value)}
+                  placeholder="Contoh: Menyesuaikan agenda keuskupan, bentrok dengan kegiatan retret dekenat, atau persiapan teknis peserta..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-amber-400 focus:bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Catatan / Keterangan Penyesuaian (Opsional):
+                </label>
+                <textarea
+                  rows={2}
+                  value={penjelasanPerubahan}
+                  onChange={(e) => setPenjelasanPerubahan(e.target.value)}
+                  placeholder="Catatan koordinasi lanjutan, lokasi pengganti, atau instruksi untuk panitia..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-slate-400 focus:bg-white"
                 />
               </div>
             </div>
